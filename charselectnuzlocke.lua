@@ -22,7 +22,7 @@ local canopencsmenu = 2 --the current cs menu status
 local currentcostume --the current cs costume for the local player
 local currentcharacter --the current cs character for the local player
 local currentcharacttype --the current cs forcecharacter type for the local player
-local version = "1.1.0" -- the current version of the mod
+local version = "1.1.1" -- the current version of the mod
 local lastdeadcharacter --last character the local player died as
 local lastdeadcostume --the costume of the last character the local player died as
 local lastdeadstage --the  stage where the last character that the local player died as died in
@@ -1132,4 +1132,5 @@ _G.charselectnuzlockeapi = {
 }
 
 modsupporthelperfunctions.charselectnuzlockeapi = _G.charselectnuzlockeapi --local reference for _G.charselectnuzlockeapi
+
 
