@@ -1,5 +1,5 @@
 -- name: Character Select Nuzlocke
--- description:  character select nuzlocke \nCreated by wereyoshi.
+-- description:  character select nuzlocke  \nCreated by wereyoshi.
 -- pausable: true
 -- category: cs
 
@@ -22,7 +22,7 @@ local canopencsmenu = 2 --the current cs menu status
 local currentcostume --the current cs costume for the local player
 local currentcharacter --the current cs character for the local player
 local currentcharacttype --the current cs forcecharacter type for the local player
-local version = "1.0.0" -- the current version of the mod
+local version = "1.1.0" -- the current version of the mod
 local lastdeadcharacter --last character the local player died as
 local lastdeadcostume --the costume of the last character the local player died as
 local lastdeadstage --the  stage where the last character that the local player died as died in
@@ -30,16 +30,26 @@ local onnocharactersfunctiontable = {} --table of functions to run when the loca
 local onnuzlockeresetfunctiontable = {} --table of functions to run when the nuzlocke table is reset for the local player
 local onnuzlockeupdatefunctiontable = {} --table of functions to run when the nuzlocke table is updated for the local player
 local resettable_command
+local nuzlockechangecharacterpause_command
 local resetsaveonreset = true --whether the current save should also be reset when reseting the nuzlocke if true the save will be reset with nuzlocke reset
 local hookupdate
 local othermodsetresetonsavesetting = false --whether another mod changed resetsaveonreset through the api
 local deathicon = gTextures.no_camera
+gGlobalSyncTable.isfreeforall = false --whether it is a free for all
+gGlobalSyncTable.canchangecharacteronexit = false --whether players can change characters on pause exit
+local bool_to_str = {[false] = "off",[true] = "on"} --table for converting boolean into string
 
 local charmin = 0 --the first character in the character select table
 
 local startinglevel --the level you start in
 local startingarea -- the area you start in
 local startingactnum -- the act you start in
+local teamfunctionsetbyothermod = false
+
+if table.deepcopy == nil then
+    log_to_console(string.format("Outdated coopdx client detected that lacks needed functions for character select nuzlocke mod version %s",version), 1)
+    return
+end
 
 ---this is the function character select nuzlocke uses by default to reset the current save
 local resetnuzlocksavefunction = function()
@@ -62,6 +72,7 @@ local function final_mario_update(m)
         local remainingcharactercount = 0
         local chardescription = "The following characters remain: "
         local livesremainstring
+        local lockedcharactercount = 0 --the current number of locked non eliminated characters
         djui_chat_message_create("The following characters remain:")
         for key,value in pairs(useablecharacter)do
             for subkey,subvalue in pairs(useablecharacter[key])do
@@ -69,6 +80,9 @@ local function final_mario_update(m)
                     djui_chat_message_create(string.format("%s ", charactertable[key][subkey].name))
                     chardescription = string.format("%s %s ",chardescription, charactertable[key][subkey].name)
                     remainingcharactercount = remainingcharactercount + 1
+                    if charactertable[key].locked then
+                        lockedcharactercount = lockedcharactercount + 1
+                    end
                 end
             end
         end
@@ -82,7 +96,16 @@ local function final_mario_update(m)
             djui_chat_message_create("out of characters")
             livesremainstring = "out of characters"
         end
+        if lockedcharactercount > 0 then
+            if lockedcharactercount >= remainingcharactercount then
+                djui_chat_message_create(string.format("out of useable characters due to the remaining %d characters needing to be unlocked", lockedcharactercount))
+                gPlayerSyncTable[0].nocharacters = true
+            else
+                djui_chat_message_create(string.format("%d of which need to be unlocked", lockedcharactercount))
+            end
+        end
         modsupporthelperfunctions.charSelect.character_edit(modsupporthelperfunctions.finalindex,livesremainstring,chardescription,nil,nil,nil)
+        update_mod_menu_element_name(modsupporthelperfunctions.charactercountmenuindex,livesremainstring)
         canopencsmenu = 2
         modsupporthelperfunctions.charSelect.set_menu_open(true)
         if (gPlayerSyncTable[0].usingdeadcharacter == true) then
@@ -127,17 +150,27 @@ end
 
 --function to initialize the nuzlocke table
 local function init_nuzlocketable()
-    
+    modsupporthelperfunctions.statustable = {}--table of mod menu positions for each character's status
+    local sortedtable = {} --table of character select characters sorted by name
     for i = charmin,charmax do
         useablecharacter[i] = {}
         characternametable[i] = {}
+        modsupporthelperfunctions.statustable[i] = {}
         if charactertable[i].locked then
             modsupporthelperfunctions.charSelect.character_set_locked(i,nil,false) --unlocking all characters
         end
         for j = 1, costumemaxtable[i] do
             useablecharacter[i][j] = true
             characternametable[i][j] = charactertable[i][j].name
+            table.insert(sortedtable,{name = charactertable[i][j].name,characterindex = i, costumeindex = j})
         end
+    end
+    table.sort(sortedtable,function(currentindex,nextindex)
+        return currentindex.name < nextindex.name
+    end)
+    hook_mod_menu_text("format : name (status) [charindex,costumeindex]")
+    for key,value in pairs(sortedtable) do
+        modsupporthelperfunctions.statustable[value.characterindex][value.costumeindex] = hook_mod_menu_text(string.format("%s (alive)  [%d,%d]",value.name,value.characterindex,value.costumeindex))
     end
 end
 
@@ -159,6 +192,9 @@ local function reset_nuzlocketable(nuztable)
         for j = 1, costumemaxtable[i] do
             nuztable[i][j] = true
             modsupporthelperfunctions.charSelect.character_edit_costume(i,j,characternametable[i][j],nil, nil,nil, nil, nil, charactertable[i][j].lifeIcon, nil)
+            if (nuztable == useablecharacter) and (modsupporthelperfunctions.statustable[i][j] ~= nil) then
+                update_mod_menu_element_name(modsupporthelperfunctions.statustable[i][j],string.format("%s (alive)  [%d,%d]",charactertable[i][j].name,i,j))
+            end
         end
     end
     if resetsaveonreset == true then
@@ -204,18 +240,68 @@ local function revive_character(playerindex,charactertorevive,costumeofcharacter
         djui_chat_message_create('Only the host can change this setting!')
          return
     end
-    
+    local otherplayerteam
+    local localplayerteam
+    local isfreeforall
+    local reviveteam
+    local x
+    local teammateteam
     if playerindex ~= 0 then
         otherplayercharactertable[playerindex][charactertorevive][costumeofcharactertorevive] = true
         network_send_to(playerindex,true,{revivedcharacter = charactertorevive,revivededcostume = costumeofcharactertorevive})
         gPlayerSyncTable[playerindex].nocharacters = false
+        isfreeforall,reviveteam = teamfunction(gMarioStates[playerindex])
+        isfreeforall,localplayerteam = teamfunction(gMarioStates[0])
+        if (isfreeforall ~= true) then
+            if reviveteam == localplayerteam then
+                gPlayerSyncTable[playerindex].nocharacters = false
+                useablecharacter[charactertorevive][costumeofcharactertorevive] = true
+                if (modsupporthelperfunctions.statustable[charactertorevive][costumeofcharactertorevive] ~= nil) then
+                    update_mod_menu_element_name(modsupporthelperfunctions.statustable[charactertorevive][costumeofcharactertorevive],(string.format("%s (alive)  [%d,%d]",charactertable[charactertorevive][costumeofcharactertorevive].name,charactertorevive,costumeofcharactertorevive)))
+                end
+                modsupporthelperfunctions.charSelect.character_edit_costume(charactertorevive,costumeofcharactertorevive,characternametable[charactertorevive][costumeofcharactertorevive],nil, nil,nil, nil, nil, nil, nil)
+                for i = 1, costumemaxtable[charactertorevive] do --setting back the character icons for the revived character's costumes
+                    modsupporthelperfunctions.charSelect.character_edit_costume(charactertorevive,i,nil,nil, nil,nil, nil, nil, charactertable[charactertorevive][i].lifeIcon, nil)
+                end
+                for key,value in pairs(onnuzlockeupdatefunctiontable)do
+                    value()
+                end
+            end
+            for i = 1,MAX_PLAYERS - 1 do
+                x,otherplayerteam = teamfunction(gMarioStates[i])
+                if (i ~= playerindex) and (reviveteam == otherplayerteam) then
+                    network_send_to(playerindex,true,{revivedcharacter = charactertorevive,revivededcostume = costumeofcharactertorevive})
+                    otherplayercharactertable[i][charactertorevive][costumeofcharactertorevive] = true
+                end
+            end
+        end
+        
     else
         gPlayerSyncTable[playerindex].nocharacters = false
         useablecharacter[charactertorevive][costumeofcharactertorevive] = true
+        if (modsupporthelperfunctions.statustable[charactertorevive][costumeofcharactertorevive] ~= nil) then
+            update_mod_menu_element_name(modsupporthelperfunctions.statustable[charactertorevive][costumeofcharactertorevive],(string.format("%s (alive)  [%d,%d]",charactertable[charactertorevive][costumeofcharactertorevive].name,charactertorevive,costumeofcharactertorevive)))
+        end
+        modsupporthelperfunctions.charSelect.character_edit_costume(charactertorevive,costumeofcharactertorevive,characternametable[charactertorevive][costumeofcharactertorevive],nil, nil,nil, nil, nil, nil, nil)
+        for i = 1, costumemaxtable[charactertorevive] do --setting back the character icons for the revived character's costumes
+            modsupporthelperfunctions.charSelect.character_edit_costume(charactertorevive,i,nil,nil, nil,nil, nil, nil, charactertable[charactertorevive][i].lifeIcon, nil)
+        end
         for key,value in pairs(onnuzlockeupdatefunctiontable)do
             value()
         end
+        
+        isfreeforall,otherplayerteam = teamfunction(gMarioStates[playerindex])
+        isfreeforall,localplayerteam = teamfunction(gMarioStates[0])
         gPlayerSyncTable[playerindex].nocharacters = false
+        if (isfreeforall ~= true) then
+            for i = 1,MAX_PLAYERS - 1 do
+                x,otherplayerteam = teamfunction(gMarioStates[i])
+                if (localplayerteam == otherplayerteam) then
+                    network_send_to(i,true,{revivedcharacter = charactertorevive,revivededcostume = costumeofcharactertorevive})
+                    otherplayercharactertable[i][charactertorevive][costumeofcharactertorevive] = true
+                end
+            end
+        end
     end
 
 end
@@ -232,7 +318,7 @@ local server_revive_character_for_player = function(...)
     local costumeofcharactertorevive ---the costume number of the character to revive in the character select table
     local name ---a name in the character select table
     local namefound = false --if name was found in the character select table
-    if type(arg[1]) == "number" and (arg[1] > 0) and (arg[1] < MAX_PLAYERS) then
+    if type(arg[1]) == "number" and (arg[1] >= 0) and (arg[1] < MAX_PLAYERS) then
         playerindex = arg[1]
     else
         log_to_console(string.format("invalid playerindex was passed to revive_character function character select nuzlocke mod version is %s",version), 1)
@@ -247,17 +333,18 @@ local server_revive_character_for_player = function(...)
         end
     elseif (type(arg[2]) == "string") then
         name = string.lower(arg[2])
-        for key,value in pairs(charactertable)do
-            for subkey,subvalue in pairs(charactertable[key])do
-                if string.lower(charactertable[key][subkey].name) == name then
+        for key,value in pairs(characternametable)do
+            for subkey,subvalue in pairs(characternametable[key])do
+                if (subvalue ~= nil) and (string.lower(subvalue) == name) then
                     charactertorevive = key
                     costumeofcharactertorevive = subkey
+                    namefound = true
                     break
                 end
             end
         end
         if namefound ~= true then
-            log_to_console(string.format("invalid character name was passed to revive_character function character select nuzlocke mod version is %s",version), 1)
+            log_to_console(string.format("invalid character name %s was passed to revive_character function character select nuzlocke mod version is %s",name,version), 1)
             return
         end
     end
@@ -272,6 +359,7 @@ local function on_level_init()
             costumemaxtable[key] = #(charactertable[key])
         end
         charmax = #charactertable 
+        modsupporthelperfunctions.charactercountmenuindex = hook_mod_menu_text("all characters are alive")
         init_nuzlocketable()
         modsupporthelperfunctions.finalindex = modsupporthelperfunctions.charSelect.character_add("nuzlocke death tracker","no character lost", nil, nil, nil, CT_MARIO, deathicon,1) --index used for checking if the player has no lives left in the character select mod
         hook_event(HOOK_MARIO_UPDATE, final_mario_update) --Called once per player per frame at the end of a mario update
@@ -316,6 +404,10 @@ local function on_death(m)
     local deadcostumecount = 0
     lastdeadstage = get_level_name(gNetworkPlayers[0].currCourseNum, gNetworkPlayers[0].currLevelNum, gNetworkPlayers[0].currAreaIndex)
     useablecharacter[lastdeadcharacter][lastdeadcostume] = false
+    if (modsupporthelperfunctions.statustable[lastdeadcharacter][lastdeadcostume] ~= nil) then
+        update_mod_menu_element_name(modsupporthelperfunctions.statustable[lastdeadcharacter][lastdeadcostume],(string.format("%s (dead)  [%d,%d]",charactertable[lastdeadcharacter][lastdeadcostume].name,lastdeadcharacter,lastdeadcostume)))
+    end
+
     for key,value in pairs(onnuzlockeupdatefunctiontable)do
         value()
     end
@@ -366,9 +458,15 @@ local function on_packet_receive(dataTable)
         if (currentcharacter == dataTable.diedascharacter ) and (currentcostume == dataTable.diedascostume) then
             gPlayerSyncTable[0].usingdeadcharacter = true
         else
-            useablecharacter[dataTable.diedascharacter][dataTable.diedascostume] = false
-            modsupporthelperfunctions.charSelect.character_edit_costume(dataTable.diedascharacter,dataTable.diedascostume,"(x)" ..characternametable[dataTable.diedascharacter][dataTable.diedascostume],nil, nil,nil, nil, nil, nil, nil)
             local receiveddeadcharacter = dataTable.diedascharacter
+            local receiveddeadcostume = dataTable.diedascostume
+            useablecharacter[dataTable.diedascharacter][receiveddeadcostume] = false
+            if (modsupporthelperfunctions.statustable[receiveddeadcharacter][receiveddeadcostume] ~= nil) then
+                update_mod_menu_element_name(modsupporthelperfunctions.statustable[receiveddeadcharacter][receiveddeadcostume],(string.format("%s (dead)  [%d,%d]",charactertable[receiveddeadcharacter][receiveddeadcostume].name,receiveddeadcharacter,receiveddeadcostume)))
+            end
+            
+            modsupporthelperfunctions.charSelect.character_edit_costume(receiveddeadcharacter,receiveddeadcostume,"(x)" ..characternametable[receiveddeadcharacter][receiveddeadcostume],nil, nil,nil, nil, nil, nil, nil)
+            
             for i = 1,costumemaxtable[receiveddeadcharacter] do
                 if useablecharacter[receiveddeadcharacter][i] == false then
                     deadcostumecount = deadcostumecount + 1
@@ -387,7 +485,10 @@ local function on_packet_receive(dataTable)
         local revivecharacter = dataTable.revivedcharacter
         local revivecostume = dataTable.revivededcostume
         djui_chat_message_create(string.format("%s(%d character %d costume) was revived",charactertable[revivecharacter][revivecostume].name,revivecharacter,revivecostume))
-        useablecharacter[revivecharacter][dataTable.revivededcostume] = true
+        useablecharacter[revivecharacter][revivecostume] = true
+        if (modsupporthelperfunctions.statustable[revivecharacter][revivecostume] ~= nil) then
+            update_mod_menu_element_name(modsupporthelperfunctions.statustable[revivecharacter][revivecostume],(string.format("%s (alive)  [%d,%d]",charactertable[revivecharacter][revivecostume].name,revivecharacter,revivecostume)))
+        end
         modsupporthelperfunctions.charSelect.character_edit_costume(revivecharacter,revivecostume,characternametable[revivecharacter][revivecostume],nil, nil,nil, nil, nil, nil, nil)
         for i = 1, costumemaxtable[revivecharacter] do --setting back the character icons for the revived character's costumes
             modsupporthelperfunctions.charSelect.character_edit_costume(revivecharacter,i,nil,nil, nil,nil, nil, nil, charactertable[revivecharacter][i].lifeIcon, nil)
@@ -434,6 +535,7 @@ local function on_packet_receive(dataTable)
                 break
             end
             useablecharacter[characterentry][costumeentry] = false
+            update_mod_menu_element_name(modsupporthelperfunctions.statustable[characterentry][costumeentry],(string.format("%s (dead)  [%d,%d]",charactertable[characterentry][costumeentry].name,characterentry,costumeentry)))
             modsupporthelperfunctions.charSelect.character_edit_costume(characterentry,costumeentry,"(x)" ..characternametable[characterentry][costumeentry],nil, nil,nil, nil, nil, nil, nil)
             if (gPlayerSyncTable[0].usingdeadcharacter ~= true) and (characterentry == currentcharacter) and (costumeentry == currentcostume) then
                 gPlayerSyncTable[0].usingdeadcharacter = true
@@ -460,30 +562,22 @@ local function on_packet_receive(dataTable)
 
 end
 
+local function save_nuzlockesettings()
+    mod_storage_save_bool("canchangecharacteronexit", gGlobalSyncTable.canchangecharacteronexit)
+end
+
+local function load_nuzlockesettings()
+    if mod_storage_load_bool("canchangecharacteronexit") then
+        gGlobalSyncTable.canchangecharacteronexit = mod_storage_load_bool("canchangecharacteronexit")
+    else
+        mod_storage_save_bool("canchangecharacteronexit", gGlobalSyncTable.canchangecharacteronexit)
+    end
+    
+end
+
 --function used for built in support for some external mods
 local function modsupport()
-    if _G.mhApi ~= nil and (teamfunction == nil) then
-        modsupporthelperfunctions.mhApi = _G.mhApi --local reference for _G.mhApi
-        teamfunction = function (m)
-            local isfreeforall = false --whether its a free for all or not false if it is not a freeforall 
-            local currentteam = modsupporthelperfunctions.mhApi.getTeam(m.playerIndex)--the current team the mariostate is on
-            return isfreeforall,currentteam
-        end
-    elseif (_G.ShineThief ~= nil) and (teamfunction == nil) then
-        modsupporthelperfunctions.ShineThief = _G.ShineThief --local reference for _G.ShineThief
-        teamfunction = function (m)
-            local isfreeforall = false --whether its a free for all or not false if it is not a freeforall 
-            local currentteam = modsupporthelperfunctions.ShineThief.getTeam(m.playerIndex)--the current team the mariostate is on
-            return isfreeforall,currentteam
-        end
-    elseif _G.HideAndSeek ~= nil and (teamfunction == nil) then
-        modsupporthelperfunctions.HideAndSeek = _G.HideAndSeek --local reference for _G.HideAndSeek
-        --[[ teamfunction = function (m)
-            local isfreeforall = false --whether its a free for all or not false if it is not a freeforall 
-            local currentteam = modsupporthelperfunctions.mhApi.getTeam(m.playerIndex)--the current team the mariostate is on
-            return isfreeforall,currentteam
-        end ]]
-    end
+    
     if _G.charSelect ~= nil then --if the character select mod is on
         modsupporthelperfunctions.charSelect = _G.charSelect --local reference for _G.charSelect
         modsupporthelperfunctions.charselectoptions = {}
@@ -653,13 +747,7 @@ local function modsupport()
         hook_event(HOOK_ON_DEATH, on_death) --hook for the player dying
     
         hook_event(HOOK_UPDATE, hookupdate) -- hook that is called once per frame
-        if teamfunction == nil then
-            teamfunction = function (m)
-                local isfreeforall = false --whether its a free for all or not false if it is not a freeforall 
-                local currentteam = 0 --the current team the mariostate is on
-                return isfreeforall,currentteam
-            end
-        end
+        
         if not othermodsetresetonsavesetting then
             for key,value in pairs(gActiveMods) do
                 if (value.incompatible ~= nil) and string.match((value.incompatible), "gamemode") then
@@ -667,7 +755,51 @@ local function modsupport()
                 end
             end
         end
-        
+            local resetnuzlocktext = "reset nuzlocke"
+            if resetsaveonreset then
+                resetnuzlocktext = resetnuzlocktext .."(This option will reset the current save)"
+            end
+            hook_mod_menu_button(resetnuzlocktext,function(index)
+                resettable_command()
+            end)
+            modsupporthelperfunctions.canchangecharacteronexitpos = hook_mod_menu_button("changing character on pause exit is " .. bool_to_str[gGlobalSyncTable.canchangecharacteronexit],function(index)
+                nuzlockechangecharacterpause_command(bool_to_str[not gGlobalSyncTable.canchangecharacteronexit])
+            end)
+            hook_mod_menu_text("when on hold b when pause exiting to not change characters")
+
+            hook_mod_menu_button("save current nuzlocke settings",function(index)
+                characterselectnuzlockeconfig_command("save")
+            end)
+            hook_mod_menu_button("load current nuzlocke settings",function(index)
+                characterselectnuzlockeconfig_command("load")
+            end)
+            if _G.mhApi ~= nil and (not teamfunctionsetbyothermod) then
+                modsupporthelperfunctions.mhApi = _G.mhApi --local reference for _G.mhApi
+                teamfunction = function (m)
+                    local isfreeforall = false --whether its a free for all or not false if it is not a freeforall 
+                    local currentteam = modsupporthelperfunctions.mhApi.getTeam(m.playerIndex)--the current team the mariostate is on
+                    return isfreeforall,currentteam
+                end
+            elseif (_G.ShineThief ~= nil) and (not teamfunctionsetbyothermod) then
+                modsupporthelperfunctions.ShineThief = _G.ShineThief --local reference for _G.ShineThief
+                teamfunction = function (m)
+                    local isfreeforall = false --whether its a free for all or not false if it is not a freeforall 
+                    local currentteam = modsupporthelperfunctions.ShineThief.getTeam(m.playerIndex)--the current team the mariostate is on
+                    return isfreeforall,currentteam
+                end
+            elseif not teamfunctionsetbyothermod then
+                teamfunction = function (m)
+                    local currentteam = 0 --the current team the mariostate is on
+                    return gGlobalSyncTable.isfreeforall,currentteam
+                end
+                hook_mod_menu_checkbox("toggle nuzlocke free for all",gGlobalSyncTable.isfreeforall,function(index,value)
+                    if not network_is_server() then
+                        return
+                    end
+                    gGlobalSyncTable.isfreeforall = not gGlobalSyncTable.isfreeforall
+                    value = gGlobalSyncTable.isfreeforall
+                end)
+            end
     else
         log_to_console(string.format("the character select mod was not found. \n This mod relies on the character select mod to function which can be found at https://github.com/Squishy6094/character-select-coop/releases \n  character select nuzlocke mod version is %s",version), 2)
 
@@ -686,6 +818,7 @@ local function on_player_connected(m)
     if servermodsync == false then
         modsupport()
         servermodsync = true
+        load_nuzlockesettings()
     end
 end
 
@@ -733,6 +866,9 @@ local function on_pause_exit(usedExitToCastle)
     local m = gMarioStates[0]
     if ((m.pos.y ~= m.floorHeight) and (m.input & INPUT_IN_WATER == 0)) or (m.hurtCounter > 0) then
         return false
+    elseif gGlobalSyncTable.canchangecharacteronexit and (m.controller.buttonDown & B_BUTTON == 0) then
+        canopencsmenu = 2
+        modsupporthelperfunctions.charSelect.set_menu_open(true)
     end
 end
 
@@ -769,15 +905,79 @@ resettable_command = function()
     return true
 end
 
-hook_chat_command('resetnuzlocketable', "reset nuzlocke", resettable_command)
-if hook_mod_menu_text ~= nil then
-    hook_mod_menu_text(string.format("Character Select Nuzlocke version %s",version))
+--- @param msg string
+--this function toggles changing character on pauseexit
+nuzlockechangecharacterpause_command = function(msg)
+    if not network_is_server() then
+        djui_chat_message_create('Only the host can change this setting!')
+        return true
+    end
+	local m = string.lower(msg)
+    if m == 'on' then
+        djui_chat_message_create('changing character on pause exit is \\#00C7FF\\on\\#ffffff\\!')
+		gGlobalSyncTable.canchangecharacteronexit = true 
+        return true
+	elseif m == 'off' then
+		djui_chat_message_create('changing character on pause exit is \\#A02200\\off\\#ffffff\\!')
+		gGlobalSyncTable.canchangecharacteronexit = false 
+		return true
+	else
+		return false
+    end
 end
-hook_mod_menu_button("reset nuzlocke",function(index)
-    resettable_command()
+
+--- @param msg string
+--this function allows the host to revive a character
+nuzlockerevivecharacter_command = function(msg)
+    if not network_is_server() then
+        djui_chat_message_create('Only the host can change this setting!')
+        return true
+    end
+    local revivetable = split_string(msg," ")
+    if #revivetable == 3 then --revive character by character and costume position for a player
+        server_revive_character_for_player(tonumber(revivetable[1]),tonumber(revivetable[2]),tonumber(revivetable[3]))
+        return true
+    elseif #revivetable == 2 then --revive character by name for a player
+        server_revive_character_for_player(tonumber(revivetable[1]),revivetable[2]:gsub("^%s*(.-)%s*$", "%1"))
+        return true
+    end
+end
+
+--- @param msg string
+--this is the function for save server settings or loading them
+characterselectnuzlockeconfig_command = function(msg)
+    local m = string.lower(msg)
+    if m == 'save' then
+        save_nuzlockesettings()
+        return true
+    elseif m == 'load' then
+        if not network_is_server() and not network_is_moderator then
+            djui_chat_message_create('Only the host or a mod can change this setting!')
+            return true
+        else
+            load_nuzlockesettings()
+            return true
+        end
+    end
+
+end
+
+hook_chat_command('resetnuzlocketable', "reset nuzlocke", resettable_command)
+
+hook_chat_command('nuzlockechangecharacterpause', "toggle changing character after pause exiting a stage when on can hold b when pause exiting to stick to current character instead", nuzlockechangecharacterpause_command)
+
+hook_chat_command('nuzlockerevivecharacter', "revive a character for a player and their team using either the character's name or their table position and costume position. 1st argument is the player to revive the character for.", nuzlockerevivecharacter_command)
+
+hook_chat_command('characterselectnuzlockeconfig', "[save|load] to save the current character select nuzlocke settings to a file or load them (loading only works if used by a moderator or the server)", characterselectnuzlockeconfig_command)
+
+
+hook_mod_menu_text(string.format("Character Select Nuzlocke version %s",version))
+
+
+
+hook_on_sync_table_change(gGlobalSyncTable,"canchangecharacteronexit","tag",function(tag, oldVal, newVal)
+    update_mod_menu_element_name(modsupporthelperfunctions.canchangecharacteronexitpos,"changing character on pause exit is " .. bool_to_str[gGlobalSyncTable.canchangecharacteronexit])
 end)
-
-
 
 
 
@@ -786,6 +986,7 @@ _G.charselectnuzlockeapi = {
     --- @param func function function to check if the local player is on the same team as the kirby projectile's owner
     --function for other mods to add a team check for gamemodes 
     addteamcheck = function(func)
+        teamfunctionsetbyothermod = true
         teamfunction = func --expects the function to have parameters customfunc(m) param m mariostate and the function should return two values isfreeforall which is a boolean and currentteam which is a number
         --[[example function
         teamfunction = function (m)
@@ -817,18 +1018,33 @@ _G.charselectnuzlockeapi = {
             log_to_console(string.format("invalid playerindex was passed to get_hascharacterstatus function character select nuzlocke mod version is %s",version), 1)
         end
     end,
+    ---@param includelocked boolean? --whether to include locked characters in the returned table
     --function that lets other mods get a table of only the current living characters
-    get_livingcharactertable = function()
+    get_livingcharactertable = function(includelocked)
         local sizeoflivingtable = 0
         local tableoflivingcharacters = {}
-        for i = charmin,charmax do
-            for j = 1, costumemaxtable[i] do
-                if useablecharacter[i][j] == true then
-                    table.insert(tableoflivingcharacters,{i,j})
-                    sizeoflivingtable = sizeoflivingtable + 1
+        local copychartable
+        if includelocked then
+            for i = charmin,charmax do
+                for j = 1, costumemaxtable[i] do
+                    if useablecharacter[i][j] == true then
+                        table.insert(tableoflivingcharacters,{i,j})
+                        sizeoflivingtable = sizeoflivingtable + 1
+                    end
+                end
+            end
+        else
+            copychartable = modsupporthelperfunctions.charSelect.character_get_full_table()
+            for i = charmin,charmax do
+                for j = 1, costumemaxtable[i] do
+                    if (useablecharacter[i][j] == true) and (not copychartable[i][j].locked) then
+                        table.insert(tableoflivingcharacters,{i,j})
+                        sizeoflivingtable = sizeoflivingtable + 1
+                    end
                 end
             end
         end
+        
         return tableoflivingcharacters,sizeoflivingtable
     end,
     --- function to allow other mods to get the current resetnuzlocksavefunction function
