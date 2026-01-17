@@ -849,7 +849,7 @@ local function before_mario_update(m)
                     x,otherplayerteam = teamfunction(gMarioStates[i])
                     if (localplayerteam == otherplayerteam) or (gNetworkPlayers[gMarioStates[i].playerIndex].globalIndex == 0) then
                         network_send_to(gMarioStates[i].playerIndex,true,{diedascharacter = lastdeadcharacter,diedascostume = lastdeadcostume,globalindexofplayer = playerglobalindex,diedinstage = lastdeadstage})
-                        if network_is_server() then
+                        if network_is_server() and otherplayercharactertable[i] ~= nil and otherplayercharactertable[i][lastdeadcharacter] ~= nil  then
                             otherplayercharactertable[i][lastdeadcharacter][lastdeadcostume] = false
                         end
                     end
