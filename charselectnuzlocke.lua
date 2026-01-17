@@ -157,7 +157,9 @@ local function init_nuzlocketable()
         characternametable[i] = {}
         modsupporthelperfunctions.statustable[i] = {}
         if charactertable[i].locked == 1 then
-            modsupporthelperfunctions.charSelect.character_set_locked(i,nil,false) --unlocking all characters
+            modsupporthelperfunctions.charSelect.character_set_locked(i,function ()
+                return true
+            end,false) --unlocking all characters
         end
         for j = 1, costumemaxtable[i] do
             useablecharacter[i][j] = true
@@ -1132,5 +1134,4 @@ _G.charselectnuzlockeapi = {
 }
 
 modsupporthelperfunctions.charselectnuzlockeapi = _G.charselectnuzlockeapi --local reference for _G.charselectnuzlockeapi
-
 
