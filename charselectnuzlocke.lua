@@ -80,7 +80,7 @@ local function final_mario_update(m)
                     djui_chat_message_create(string.format("%s ", charactertable[key][subkey].name))
                     chardescription = string.format("%s %s ",chardescription, charactertable[key][subkey].name)
                     remainingcharactercount = remainingcharactercount + 1
-                    if charactertable[key].locked then
+                    if charactertable[key].locked == 1 then
                         lockedcharactercount = lockedcharactercount + 1
                     end
                 end
@@ -156,7 +156,7 @@ local function init_nuzlocketable()
         useablecharacter[i] = {}
         characternametable[i] = {}
         modsupporthelperfunctions.statustable[i] = {}
-        if charactertable[i].locked then
+        if charactertable[i].locked == 1 then
             modsupporthelperfunctions.charSelect.character_set_locked(i,nil,false) --unlocking all characters
         end
         for j = 1, costumemaxtable[i] do
@@ -1037,7 +1037,7 @@ _G.charselectnuzlockeapi = {
             copychartable = modsupporthelperfunctions.charSelect.character_get_full_table()
             for i = charmin,charmax do
                 for j = 1, costumemaxtable[i] do
-                    if (useablecharacter[i][j] == true) and (not copychartable[i][j].locked) then
+                    if (useablecharacter[i][j] == true) and (copychartable[i][j].locked ~= 1) then
                         table.insert(tableoflivingcharacters,{i,j})
                         sizeoflivingtable = sizeoflivingtable + 1
                     end
